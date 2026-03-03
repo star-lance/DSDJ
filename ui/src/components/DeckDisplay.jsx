@@ -15,7 +15,7 @@ export function DeckDisplay({ deck, label, color }) {
         </span>
         {deck.sync_enabled && <span className="text-xs px-2 py-0.5 rounded bg-blue-700">SYNC</span>}
         {deck.loop_active && <span className="text-xs px-2 py-0.5 rounded bg-yellow-700">LOOP</span>}
-        <span className="text-xs text-zinc-400 ml-auto">{deck.bpm.toFixed(1)} BPM</span>
+        <span className="text-xs text-zinc-400 ml-auto">{(deck.bpm ?? 0).toFixed(1)} BPM</span>
       </div>
 
       {/* Volume */}

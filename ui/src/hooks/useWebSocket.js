@@ -37,7 +37,7 @@ export function useWebSocket(url) {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
-          if (msg.type === 'state_update') setState(msg.data)
+          if (msg.type === 'state_update') setState(prev => ({ ...prev, ...msg.data }))
         } catch {}
       }
 
@@ -52,7 +52,11 @@ export function useWebSocket(url) {
     connect()
     return () => {
       clearTimeout(retryTimer)
-      wsRef.current?.close()
+      const ws = wsRef.current
+      if (ws) {
+        ws.onclose = null
+        ws.close()
+      }
     }
   }, [url])
 

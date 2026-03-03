@@ -21,7 +21,7 @@ export default function App() {
 
       <div className="grid grid-cols-2 gap-3">
         <DeckDisplay deck={state.deck_a} label="A" color="cyan" />
-        <DeckDisplay deck={state.deck_b} label="B" color="magenta" />
+        <DeckDisplay deck={state.deck_b} label="B" color="fuchsia" />
       </div>
 
       <Crossfader value={state.crossfader} />
