@@ -26,6 +26,7 @@ def normalize_stick(raw: int, deadzone: float) -> float:
     value = (raw - 128) / 128.0
     if abs(value) < deadzone:
         return 0.0
+    # >= (not >) intentional: correctly handles zero-deadzone edge case
     sign = 1.0 if value >= 0.0 else -1.0
     return sign * (abs(value) - deadzone) / (1.0 - deadzone)
 
@@ -112,6 +113,7 @@ class DualSenseController:
         Reads ``deadzone`` from config (default 0.08).
         """
         self._deadzone = config.get("deadzone", 0.08)
+        # outer pydualsense = module, inner pydualsense = class name (both happen to be the same)
         self._ds = pydualsense.pydualsense()
         self._ds.init()
 

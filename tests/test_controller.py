@@ -120,6 +120,10 @@ def test_normalize_trigger_max():
     assert normalize_trigger(255) == pytest.approx(1.0, abs=0.01)
 
 
+def test_normalize_trigger_mid():
+    assert normalize_trigger(128) == pytest.approx(0.502, abs=0.01)
+
+
 # ---------------------------------------------------------------------------
 # normalize_touchpad tests
 # ---------------------------------------------------------------------------
