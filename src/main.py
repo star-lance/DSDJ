@@ -144,7 +144,7 @@ async def main():
     mapper = InputMapper(config)
     ws_server = WebSocketServer(state_manager, state_channel, config["server"])
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     # Signal handler for clean shutdown
     stop_event = asyncio.Event()

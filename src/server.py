@@ -72,7 +72,8 @@ class WebSocketServer:
             self._app,
             host=self._host,
             port=self._port,
-            log_level="warning"
+            log_level="warning",
+            install_signal_handlers=False,
         )
         server = uvicorn.Server(config)
         await server.serve()
