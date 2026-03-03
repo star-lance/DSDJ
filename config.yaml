@@ -1,0 +1,31 @@
+controller:
+  connection: "usb"
+  deadzone: 0.08
+  touchpad_crossfader_smoothing: 0.15
+  direction_lock_threshold: 0.04
+
+midi:
+  port_name: "DualSense DJ"
+  channel: 0
+
+haptics:
+  enabled: false
+
+adaptive_triggers:
+  enabled: false
+
+gyro:
+  roll_unit: 0
+  roll_target: "mix"
+  pitch_unit: 1
+  pitch_target: "parameter1"
+  tilt_range_degrees: 45.0
+
+filter:
+  stick_curve: "exponential"
+  stick_exponent: 2.0
+
+server:
+  host: "127.0.0.1"
+  port: 8765
+  ui_port: 5173

@@ -1,0 +1,8 @@
+pydualsense
+python-rtmidi
+fastapi
+uvicorn[standard]
+websockets
+PyYAML
+pytest
+pytest-asyncio
