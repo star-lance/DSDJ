@@ -6,7 +6,7 @@ controller:
 
 midi:
   port_name: "DualSense DJ"
-  channel: 0
+  channel: 0  # 0-indexed (0 = MIDI channel 1) — used directly in status byte calculation
 
 haptics:
   enabled: false

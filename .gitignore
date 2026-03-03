@@ -7,3 +7,9 @@ ui/node_modules/
 ui/dist/
 *.egg-info/
 .env
+.claude/
+ui/.env
+ui/.env.local
+ui/.env.*.local
+*.log
+*.pid
