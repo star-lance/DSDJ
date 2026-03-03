@@ -141,6 +141,7 @@ class InputMapper:
         self._stick_exponent = config["filter"]["stick_exponent"]
         self._tilt_range = config["gyro"]["tilt_range_degrees"]
         self.gyro_reference = None  # (accel_x, accel_y, accel_z) at gyro enable
+        self._last_browse_time = 0.0
         self.gyro_roll_binding = GyroBinding(
             unit=config["gyro"]["roll_unit"],
             target=config["gyro"]["roll_target"],
@@ -283,7 +284,9 @@ class InputMapper:
                 else:
                     # Track browse: positive dy = scroll down, negative = scroll up
                     dy = state.touchpad_finger1_y - self._touchpad_lock.start[1]
-                    if abs(dy) > 0.02:
+                    now = state.timestamp
+                    if abs(dy) > 0.02 and (now - self._last_browse_time) >= 0.05:
+                        self._last_browse_time = now
                         actions.append(DJAction("track_browse", "master", dy))
         else:
             self._touchpad_lock.reset()
@@ -294,8 +297,8 @@ class InputMapper:
         if self.gyro_enabled and self.gyro_reference is not None:
             ref_x, ref_y, ref_z = self.gyro_reference
             # Tilt relative to reference position
-            roll_angle = math.atan2(state.accel_x - ref_x, state.accel_z)
-            pitch_angle = math.atan2(state.accel_y - ref_y, state.accel_z)
+            roll_angle = math.atan2(state.accel_x - ref_x, ref_z)
+            pitch_angle = math.atan2(state.accel_y - ref_y, ref_z)
             tilt_range_rad = math.radians(self._tilt_range)
             roll_val = max(0.0, min(1.0, (roll_angle / tilt_range_rad + 1.0) / 2.0))
             pitch_val = max(0.0, min(1.0, (pitch_angle / tilt_range_rad + 1.0) / 2.0))

@@ -244,3 +244,78 @@ def test_gyro_reference_cleared_on_disable():
     mapper.process(_blank_state(mute=True))
     assert mapper.gyro_enabled is False
     assert mapper.gyro_reference is None
+
+
+def test_r1_press_emits_play_pause_deck_b():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(r1=True))
+    play = next((a for a in actions if a.action_type == "play_pause" and a.deck == "B"), None)
+    assert play is not None
+
+
+def test_face_buttons_emit_hot_cue_deck_b():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(triangle=True))
+    cue = next((a for a in actions if a.action_type == "hot_cue" and a.deck == "B"), None)
+    assert cue is not None
+    assert cue.extra["cue_index"] == 1
+
+
+def test_create_emits_loop_toggle():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(create=True))
+    loop = next((a for a in actions if a.action_type == "loop_toggle"), None)
+    assert loop is not None
+
+
+def test_touchpad_horizontal_emits_crossfader():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    # First touch to set start
+    mapper.process(_blank_state(touchpad_active=True, touchpad_finger1_x=0.5, touchpad_finger1_y=0.5))
+    # Move clearly horizontal
+    actions = mapper.process(_blank_state(touchpad_active=True, touchpad_finger1_x=0.56, touchpad_finger1_y=0.5))
+    cf = next((a for a in actions if a.action_type == "crossfader"), None)
+    assert cf is not None
+
+
+def test_track_browse_throttled():
+    import time
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    # Start a vertical swipe
+    t0 = time.monotonic()
+    mapper.process(_blank_state(touchpad_active=True, touchpad_finger1_x=0.5, touchpad_finger1_y=0.1, timestamp=t0))
+    # First browse event — should fire
+    t1 = t0 + 0.001  # 1ms later (< 50ms throttle)
+    actions1 = mapper.process(_blank_state(touchpad_active=True, touchpad_finger1_x=0.5, touchpad_finger1_y=0.16, timestamp=t1))
+    browse_count_1 = sum(1 for a in actions1 if a.action_type == "track_browse")
+    # Second call < 50ms later — should NOT fire again
+    t2 = t0 + 0.01  # 10ms later (< 50ms throttle)
+    actions2 = mapper.process(_blank_state(touchpad_active=True, touchpad_finger1_x=0.5, touchpad_finger1_y=0.22, timestamp=t2))
+    browse_count_2 = sum(1 for a in actions2 if a.action_type == "track_browse")
+    # Third call > 50ms later — should fire again
+    t3 = t0 + 0.1  # 100ms later (> 50ms throttle)
+    actions3 = mapper.process(_blank_state(touchpad_active=True, touchpad_finger1_x=0.5, touchpad_finger1_y=0.28, timestamp=t3))
+    browse_count_3 = sum(1 for a in actions3 if a.action_type == "track_browse")
+    assert browse_count_1 == 1   # first fires
+    assert browse_count_2 == 0   # throttled
+    assert browse_count_3 == 1   # unthrottled after interval
+
+
+def test_gyro_produces_effect_actions():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    # Enable gyro with reference at flat position
+    mapper.process(_blank_state(mute=True, accel_x=0.0, accel_y=0.0, accel_z=1.0))
+    # Process with gyro tilted
+    actions = mapper.process(_blank_state(accel_x=0.3, accel_y=0.2, accel_z=0.9))
+    wet_dry = next((a for a in actions if a.action_type == "effect_wet_dry"), None)
+    param = next((a for a in actions if a.action_type == "effect_parameter"), None)
+    assert wet_dry is not None
+    assert param is not None
+    assert 0.0 <= wet_dry.value <= 1.0
+    assert 0.0 <= param.value <= 1.0
