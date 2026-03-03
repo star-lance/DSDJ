@@ -35,12 +35,15 @@ class MIDIBridge:
     _HOT_CUE_BASE = 0x10  # notes 0x10-0x13
 
     def __init__(self, port_name: str = "DualSense DJ"):
+        self._out = None
         self._out = rtmidi.MidiOut()
         self._out.open_virtual_port(port_name)
 
     def close(self):
+        if self._out is None:
+            return
         self._out.close_port()
-        del self._out
+        self._out = None
 
     # ------------------------------------------------------------------
     # Low-level send helpers
@@ -49,12 +52,12 @@ class MIDIBridge:
     def send_cc(self, channel: int, cc: int, value: int):
         """Send a Control Change message."""
         status = 0xB0 | (channel & 0x0F)
-        self._out.send_message([status, cc & 0x7F, min(value, 127) & 0x7F])
+        self._out.send_message([status, cc & 0x7F, max(0, min(127, value))])
 
     def send_note_on(self, channel: int, note: int, velocity: int = 127):
         """Send a Note On message."""
         status = 0x90 | (channel & 0x0F)
-        self._out.send_message([status, note & 0x7F, velocity & 0x7F])
+        self._out.send_message([status, note & 0x7F, max(0, min(127, velocity))])
 
     def send_note_off(self, channel: int, note: int):
         """Send a Note Off message."""
@@ -96,5 +99,5 @@ class MIDIBridge:
             self.send_note_on(channel, self._NOTE_MAP[t])
 
         elif t == "hot_cue":
-            idx = action.extra.get("cue_index", 1) - 1
+            idx = max(0, min(3, action.extra.get("cue_index", 1) - 1))
             self.send_note_on(channel, self._HOT_CUE_BASE + idx)
