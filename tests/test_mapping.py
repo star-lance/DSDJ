@@ -1,0 +1,224 @@
+"""Tests for src/mapping.py — DJAction, helpers, TouchpadDirectionLock, InputMapper."""
+
+import time
+import pytest
+
+from src.mapping import (
+    DJAction,
+    detect_edge,
+    apply_smoothing,
+    apply_stick_curve,
+    TouchpadDirectionLock,
+    InputMapper,
+)
+from src.controller import ControllerState
+
+
+# ---------------------------------------------------------------------------
+# Task 1: DJAction dataclass
+# ---------------------------------------------------------------------------
+
+
+def test_dj_action_fields():
+    a = DJAction(action_type="volume", deck="A", value=0.8)
+    assert a.deck == "A"
+    assert a.extra == {}
+
+
+def test_dj_action_with_extra():
+    a = DJAction(action_type="hot_cue", deck="A", value=1.0, extra={"cue_index": 2})
+    assert a.extra["cue_index"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Helper functions
+# ---------------------------------------------------------------------------
+
+
+def test_detect_edge_pressed():
+    assert detect_edge(current=True, previous=False) == "pressed"
+
+
+def test_detect_edge_released():
+    assert detect_edge(current=False, previous=True) == "released"
+
+
+def test_detect_edge_none():
+    assert detect_edge(current=True, previous=True) == "none"
+    assert detect_edge(current=False, previous=False) == "none"
+
+
+def test_apply_smoothing():
+    result = apply_smoothing(current=1.0, previous=0.0, factor=0.5)
+    assert result == pytest.approx(0.5)
+
+
+def test_apply_smoothing_no_factor():
+    result = apply_smoothing(current=0.8, previous=0.2, factor=1.0)
+    assert result == pytest.approx(0.8)
+
+
+def test_stick_curve_linear():
+    assert apply_stick_curve(0.5, "linear", 2.0) == pytest.approx(0.5)
+
+
+def test_stick_curve_exponential():
+    # At 0.5, exponent 2: 0.5^2 = 0.25
+    assert apply_stick_curve(0.5, "exponential", 2.0) == pytest.approx(0.25)
+
+
+def test_stick_curve_negative_exponential():
+    # Sign is preserved
+    assert apply_stick_curve(-0.5, "exponential", 2.0) == pytest.approx(-0.25)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: TouchpadDirectionLock
+# ---------------------------------------------------------------------------
+
+
+def test_lock_starts_as_none():
+    lock = TouchpadDirectionLock(threshold=0.04)
+    assert lock.direction is None
+
+
+def test_lock_resolves_horizontal():
+    lock = TouchpadDirectionLock(threshold=0.04)
+    lock.update(0.0, 0.0)       # touch start
+    lock.update(0.06, 0.01)     # clear horizontal motion
+    assert lock.direction == "horizontal"
+
+
+def test_lock_resolves_vertical():
+    lock = TouchpadDirectionLock(threshold=0.04)
+    lock.update(0.0, 0.0)
+    lock.update(0.01, 0.06)
+    assert lock.direction == "vertical"
+
+
+def test_lock_stays_locked_once_set():
+    lock = TouchpadDirectionLock(threshold=0.04)
+    lock.update(0.0, 0.0)
+    lock.update(0.06, 0.01)
+    assert lock.direction == "horizontal"
+    lock.update(0.01, 0.06)    # now moving vertically — should stay horizontal
+    assert lock.direction == "horizontal"
+
+
+def test_lock_resets():
+    lock = TouchpadDirectionLock(threshold=0.04)
+    lock.update(0.0, 0.0)
+    lock.update(0.06, 0.01)
+    lock.reset()
+    assert lock.direction is None
+    assert lock.start is None
+
+
+def test_eq_zone_from_start_x():
+    lock = TouchpadDirectionLock(threshold=0.04)
+    lock.update(0.1, 0.0)      # start in left third
+    lock.update(0.11, 0.06)    # vertical lock
+    assert lock.eq_zone == "low"
+
+
+def test_eq_zone_mid():
+    lock = TouchpadDirectionLock(threshold=0.04)
+    lock.update(0.5, 0.0)
+    lock.update(0.5, 0.06)
+    assert lock.eq_zone == "mid"
+
+
+def test_eq_zone_high():
+    lock = TouchpadDirectionLock(threshold=0.04)
+    lock.update(0.8, 0.0)
+    lock.update(0.8, 0.06)
+    assert lock.eq_zone == "high"
+
+
+# ---------------------------------------------------------------------------
+# Task 4: InputMapper
+# ---------------------------------------------------------------------------
+
+
+def _blank_state(**overrides) -> ControllerState:
+    defaults = dict(
+        left_stick_x=0.0, left_stick_y=0.0,
+        right_stick_x=0.0, right_stick_y=0.0,
+        l3=False, r3=False,
+        l2_analog=0.0, r2_analog=0.0,
+        l1=False, r1=False,
+        dpad_up=False, dpad_right=False, dpad_down=False, dpad_left=False,
+        triangle=False, circle=False, cross=False, square=False,
+        create=False, options=False, mute=False, ps=False,
+        touchpad_active=False, touchpad_finger1_x=0.5, touchpad_finger1_y=0.5,
+        touchpad_finger2_active=False, touchpad_finger2_x=0.0, touchpad_finger2_y=0.0,
+        touchpad_click=False,
+        gyro_x=0.0, gyro_y=0.0, gyro_z=0.0,
+        accel_x=0.0, accel_y=0.0, accel_z=1.0,
+        timestamp=time.monotonic(),
+    )
+    defaults.update(overrides)
+    return ControllerState(**defaults)
+
+
+def _config():
+    return {
+        "controller": {"deadzone": 0.08, "touchpad_crossfader_smoothing": 0.15,
+                       "direction_lock_threshold": 0.04},
+        "filter": {"stick_curve": "linear", "stick_exponent": 2.0},
+        "gyro": {"roll_unit": 0, "roll_target": "mix",
+                 "pitch_unit": 1, "pitch_target": "parameter1",
+                 "tilt_range_degrees": 45.0},
+    }
+
+
+def test_l1_press_emits_play_pause_deck_a():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())  # prime prev_state
+    actions = mapper.process(_blank_state(l1=True))
+    types = [a.action_type for a in actions]
+    assert "play_pause" in types
+    play = next(a for a in actions if a.action_type == "play_pause")
+    assert play.deck == "A"
+
+
+def test_l2_analog_emits_volume_deck_a():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(l2_analog=0.8))
+    vol = next((a for a in actions if a.action_type == "volume" and a.deck == "A"), None)
+    assert vol is not None
+    assert vol.value == pytest.approx(0.8, abs=0.01)
+
+
+def test_dpad_up_emits_hot_cue_1_deck_a():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(dpad_up=True))
+    cue = next((a for a in actions if a.action_type == "hot_cue" and a.deck == "A"), None)
+    assert cue is not None
+    assert cue.extra["cue_index"] == 1
+
+
+def test_mute_toggles_gyro():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(mute=True))
+    gyro = next((a for a in actions if a.action_type == "gyro_toggle"), None)
+    assert gyro is not None
+
+
+def test_options_held_sets_eq_mode():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    mapper.process(_blank_state(options=True))
+    assert mapper.eq_mode is True
+
+
+def test_l3_in_gyro_mode_cycles_roll_binding():
+    mapper = InputMapper(_config())
+    mapper.gyro_enabled = True
+    mapper.process(_blank_state())
+    initial_unit = mapper.gyro_roll_binding.unit
+    mapper.process(_blank_state(l3=True))
+    assert mapper.gyro_roll_binding.unit == (initial_unit + 1) % 4
