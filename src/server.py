@@ -40,14 +40,18 @@ class WebSocketServer:
                 "data": self._state_manager.to_dict()
             }))
         except Exception:
-            pass
+            self._connections.remove(websocket)
+            return
 
         try:
             while True:
                 # Keep alive — we only send to clients, not receive
                 await websocket.receive_text()
-        except WebSocketDisconnect:
-            self._connections.remove(websocket)
+        except Exception:
+            pass
+        finally:
+            if websocket in self._connections:
+                self._connections.remove(websocket)
             log.info(f"UI client disconnected. Total: {len(self._connections)}")
 
     async def broadcast(self, state_dict: dict):
