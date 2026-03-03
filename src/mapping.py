@@ -140,6 +140,7 @@ class InputMapper:
         self._stick_curve = config["filter"]["stick_curve"]
         self._stick_exponent = config["filter"]["stick_exponent"]
         self._tilt_range = config["gyro"]["tilt_range_degrees"]
+        self.gyro_reference = None  # (accel_x, accel_y, accel_z) at gyro enable
         self.gyro_roll_binding = GyroBinding(
             unit=config["gyro"]["roll_unit"],
             target=config["gyro"]["roll_target"],
@@ -256,9 +257,11 @@ class InputMapper:
         # ------------------------------------------------------------------
         if detect_edge(state.mute, prev.mute) == "pressed":
             self.gyro_enabled = not self.gyro_enabled
-            actions.append(
-                DJAction("gyro_toggle", "master", 1.0 if self.gyro_enabled else 0.0)
-            )
+            if self.gyro_enabled:
+                self.gyro_reference = (state.accel_x, state.accel_y, state.accel_z)
+            else:
+                self.gyro_reference = None
+            actions.append(DJAction("gyro_toggle", "master", 1.0 if self.gyro_enabled else 0.0))
 
         # ------------------------------------------------------------------
         # j) Touchpad processing
@@ -286,11 +289,13 @@ class InputMapper:
             self._touchpad_lock.reset()
 
         # ------------------------------------------------------------------
-        # k) Gyro processing (accelerometer-based absolute tilt, no drift)
+        # k) Gyro processing (accelerometer-based relative tilt, no drift)
         # ------------------------------------------------------------------
-        if self.gyro_enabled:
-            roll_angle = math.atan2(state.accel_x, state.accel_z)   # lateral tilt
-            pitch_angle = math.atan2(state.accel_y, state.accel_z)
+        if self.gyro_enabled and self.gyro_reference is not None:
+            ref_x, ref_y, ref_z = self.gyro_reference
+            # Tilt relative to reference position
+            roll_angle = math.atan2(state.accel_x - ref_x, state.accel_z)
+            pitch_angle = math.atan2(state.accel_y - ref_y, state.accel_z)
             tilt_range_rad = math.radians(self._tilt_range)
             roll_val = max(0.0, min(1.0, (roll_angle / tilt_range_rad + 1.0) / 2.0))
             pitch_val = max(0.0, min(1.0, (pitch_angle / tilt_range_rad + 1.0) / 2.0))

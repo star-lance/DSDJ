@@ -222,3 +222,25 @@ def test_l3_in_gyro_mode_cycles_roll_binding():
     initial_unit = mapper.gyro_roll_binding.unit
     mapper.process(_blank_state(l3=True))
     assert mapper.gyro_roll_binding.unit == (initial_unit + 1) % 4
+
+
+def test_gyro_reference_captured_on_enable():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    # Enable gyro with specific accel values
+    actions = mapper.process(_blank_state(mute=True, accel_x=0.1, accel_y=0.2, accel_z=0.9))
+    assert mapper.gyro_enabled is True
+    assert mapper.gyro_reference == (pytest.approx(0.1), pytest.approx(0.2), pytest.approx(0.9))
+
+
+def test_gyro_reference_cleared_on_disable():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    # Enable
+    mapper.process(_blank_state(mute=True))
+    assert mapper.gyro_enabled is True
+    # Disable
+    mapper.process(_blank_state())
+    mapper.process(_blank_state(mute=True))
+    assert mapper.gyro_enabled is False
+    assert mapper.gyro_reference is None
