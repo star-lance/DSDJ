@@ -42,7 +42,7 @@ class DeckState:
     eq_high: float = 0.5
     sync_enabled: bool = False
     loop_active: bool = False
-    hot_cues: list = field(default_factory=lambda: [False, False, False, False])
+    hot_cues: list[bool] = field(default_factory=lambda: [False, False, False, False])
     track_title: str = ""
     track_artist: str = ""
 
@@ -111,8 +111,9 @@ class StateManager:
                     setattr(getattr(self._state, parent), child, value)
                 else:
                     setattr(self._state, key, value)
-        if self._on_change:
-            self._on_change(self._state)
+        cb = self._on_change
+        if cb:
+            cb(dataclasses.asdict(self._state))
 
     def update_from_action(self, action) -> None:
         """Translate a DJAction into state mutations.
@@ -144,13 +145,16 @@ class StateManager:
             elif t == "eq_high":
                 deck_state().eq_high = v
             elif t == "play_pause":
-                deck_state().playing = not deck_state().playing
+                ds = deck_state()
+                ds.playing = not ds.playing
             elif t == "sync_toggle":
-                deck_state().sync_enabled = not deck_state().sync_enabled
+                ds = deck_state()
+                ds.sync_enabled = not ds.sync_enabled
             elif t == "loop_toggle":
-                deck_state().loop_active = not deck_state().loop_active
+                ds = deck_state()
+                ds.loop_active = not ds.loop_active
             elif t == "hot_cue":
-                idx = action.extra.get("cue_index", 1) - 1
+                idx = max(0, min(3, action.extra.get("cue_index", 1) - 1))
                 deck_state().hot_cues[idx] = True
             elif t == "gyro_toggle":
                 self._state.gyro_enabled = bool(v)
@@ -160,13 +164,16 @@ class StateManager:
                 self._state.effect_parameter = v
             # "pitch_nudge", "track_browse", "track_load" — transient, no state change
 
-        if self._on_change:
-            self._on_change(self._state)
+        cb = self._on_change
+        if cb:
+            cb(dataclasses.asdict(self._state))
 
     def set_on_change(self, callback) -> None:
         """Register a callback invoked after every state mutation.
 
-        The callback receives the AppState object as its sole argument.
+        The callback receives a ``dict`` (the result of
+        ``dataclasses.asdict(state)``) as its sole argument, not an
+        ``AppState`` object.
         """
         self._on_change = callback
 

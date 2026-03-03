@@ -1,5 +1,6 @@
 """Tests for src/state.py — GyroBinding, DeckState, AppState, StateManager."""
 
+import pytest
 from unittest.mock import MagicMock
 
 from src.state import AppState, DeckState, GyroBinding, StateManager
@@ -137,9 +138,19 @@ def test_on_change_callback_called_after_update():
     sm.set_on_change(cb)
     sm.update(crossfader=0.3)
     cb.assert_called_once()
-    # Callback receives the state object
+    # Callback receives a dict snapshot, not a live AppState object
     called_with = cb.call_args[0][0]
-    assert isinstance(called_with, AppState)
+    assert isinstance(called_with, dict)
+
+
+def test_on_change_callback_receives_dict():
+    sm = StateManager()
+    received = []
+    sm.set_on_change(lambda s: received.append(s))
+    sm.update(crossfader=0.7)
+    assert len(received) == 1
+    assert isinstance(received[0], dict)
+    assert received[0]["crossfader"] == pytest.approx(0.7)
 
 
 # ---------------------------------------------------------------------------
