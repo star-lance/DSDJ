@@ -13,3 +13,4 @@ ui/.env.local
 ui/.env.*.local
 *.log
 *.pid
+.worktrees/
