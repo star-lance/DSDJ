@@ -1,7 +1,28 @@
 """main.py — asyncio entry point for the DualSense DJ Controller.
 
-Wires together all modules under a task supervisor at 250Hz controller loop,
-a 60fps broadcast loop, and a WebSocket server.
+This module is the top-level wiring layer.  It instantiates every subsystem,
+connects them together, and manages the lifecycle of three concurrent tasks
+under a simple supervisor:
+
+Tasks:
+    ``controller_loop`` — polls the DualSense HID device at 250 Hz, maps
+        inputs to ``DJAction`` objects, sends MIDI, and updates internal state.
+    ``broadcast_loop``  — consumes state snapshots from the channel and
+        broadcasts them to connected WebSocket clients at up to 60 fps.
+    ``ws_server.serve`` — runs the FastAPI/uvicorn WebSocket server that the
+        React UI connects to.
+
+Concurrency model:
+    The asyncio event loop runs on the main thread.  The only blocking I/O
+    (HID reads from ``pydualsense``) is offloaded to the default
+    ``ThreadPoolExecutor`` via ``loop.run_in_executor``.  All other work
+    (mapping, MIDI, state updates) is fast enough to run directly on the loop.
+
+Signal handling:
+    ``SIGINT`` (Ctrl-C) and ``SIGTERM`` are caught via
+    ``loop.add_signal_handler`` and set a shared ``asyncio.Event``
+    (``stop_event``).  Once set, the main coroutine cancels all tasks and
+    performs a clean shutdown.
 """
 
 import asyncio
@@ -21,17 +42,48 @@ log = logging.getLogger(__name__)
 
 
 class LatestValueChannel:
-    """Async channel that always delivers the latest value, dropping stale ones."""
+    """Async single-producer single-consumer channel that keeps only the newest value.
+
+    Unlike ``asyncio.Queue``, this channel does not accumulate a backlog.
+    When the consumer is slower than the producer (which it can be — the
+    controller runs at 250 Hz but broadcasts are capped at 60 fps) old state
+    snapshots are silently overwritten by newer ones.
+
+    This is intentional: the UI only ever needs the *latest* state to render
+    an accurate view.  Queuing every intermediate state would just waste
+    memory and cause the UI to lag behind reality.
+
+    The channel uses an ``asyncio.Event`` as its signalling primitive.  The
+    event is set by ``put()`` (possibly overwriting a value that hasn't been
+    consumed yet) and cleared by ``get()`` after reading the stored value.
+    """
 
     def __init__(self):
         self._value = None
         self._event = asyncio.Event()
 
     def put(self, value):
+        """Store the latest value and signal any waiting consumer.
+
+        If the previous value has not yet been consumed it is silently
+        discarded — only the newest value matters.
+
+        Args:
+            value: The new value to store (any object).
+        """
         self._value = value
         self._event.set()
 
     async def get(self):
+        """Wait for the next value and return it.
+
+        Suspends the caller until ``put()`` is called, then clears the event
+        and returns the stored value.  If ``put()`` is called again before
+        the next ``get()``, the intermediate value is lost.
+
+        Returns:
+            The most recently ``put`` value.
+        """
         await self._event.wait()
         self._event.clear()
         return self._value
@@ -43,7 +95,31 @@ class LatestValueChannel:
 
 
 async def controller_loop(controller, mapper, midi_bridge, state_manager, state_channel, loop):
-    """Read controller at 250Hz, map inputs, send MIDI, push state."""
+    """Poll the DualSense at 250 Hz, map inputs, send MIDI, and push state.
+
+    Runs as a long-lived coroutine under ``supervised_task``.  Each iteration:
+
+    1. Offloads the blocking HID read to a thread-pool executor so the event
+       loop is not stalled waiting for USB I/O.
+    2. Calls ``mapper.process()`` — pure computation, no I/O.
+    3. Sends MIDI CC/Note messages for each produced action.  MIDI writes are
+       microsecond-latency operations and are called directly (not via
+       executor) since they do not cause measurable event-loop jitter.
+    4. Applies each action to the ``StateManager`` (updates the in-memory
+       state snapshot used by the WebSocket broadcast loop).
+    5. Pushes the serialised state dict to ``state_channel``; the channel
+       drops it if a newer value arrives before the broadcast loop consumes it.
+    6. Sleeps for the remainder of the 4 ms (250 Hz) budget.
+
+    Args:
+        controller: ``DualSenseController`` instance — owns the HID handle.
+        mapper: ``InputMapper`` instance — stateful, must not be shared.
+        midi_bridge: ``MIDIBridge`` instance — owns the virtual MIDI port.
+        state_manager: ``StateManager`` instance — thread-safe state store.
+        state_channel: ``LatestValueChannel`` — delivers state to broadcast loop.
+        loop: The running asyncio event loop (obtained from
+            ``asyncio.get_running_loop()`` in ``main``).
+    """
     INTERVAL = 0.004  # 250Hz
 
     while True:
@@ -84,7 +160,18 @@ async def controller_loop(controller, mapper, midi_bridge, state_manager, state_
 
 
 async def broadcast_loop(state_channel, ws_server):
-    """Consume state channel and broadcast to WebSocket clients at up to 60fps."""
+    """Consume state from the channel and broadcast to WebSocket clients.
+
+    Caps the broadcast rate at 60 fps (``MIN_INTERVAL = 1/60`` s) so that
+    connected browser clients are not overwhelmed by the full 250 Hz rate of
+    the controller loop.  Because ``LatestValueChannel`` silently drops stale
+    values, the state delivered here is always the most recent one available
+    at the time the channel was consumed.
+
+    Args:
+        state_channel: ``LatestValueChannel`` — source of state snapshots.
+        ws_server: ``WebSocketServer`` — destination for JSON broadcasts.
+    """
     MIN_INTERVAL = 1 / 60
 
     while True:
@@ -99,10 +186,23 @@ async def broadcast_loop(state_channel, ws_server):
 
 
 async def supervised_task(coro_factory, name: str):
-    """Run a coroutine, restarting it on recoverable errors.
+    """Run a coroutine indefinitely, restarting it after recoverable crashes.
 
-    asyncio.CancelledError is NOT a subclass of Exception in Python 3.8+,
-    so task cancellation propagates correctly and does NOT restart.
+    ``asyncio.CancelledError`` is intentionally NOT caught here.  In Python
+    3.8+, ``CancelledError`` is a subclass of ``BaseException``, not
+    ``Exception``, so the ``except Exception`` clause below does not intercept
+    it.  This is correct by design: when the main shutdown sequence calls
+    ``task.cancel()``, the ``CancelledError`` propagates up immediately and
+    terminates the supervised task cleanly without an unwanted restart.
+
+    Any other exception (e.g. ``OSError`` from a momentary USB disconnect,
+    ``RuntimeError`` from a pydualsense state hiccup) is logged and the
+    coroutine is restarted after a 2-second back-off.
+
+    Args:
+        coro_factory: Zero-argument callable that returns a fresh coroutine
+            object each time it is called.  Passed as a lambda in ``main``.
+        name: Human-readable task name used in log messages.
     """
     while True:
         try:
@@ -118,11 +218,39 @@ async def supervised_task(coro_factory, name: str):
 
 
 def load_config(path="config.yaml") -> dict:
+    """Load and parse the YAML configuration file.
+
+    Args:
+        path: Path to the YAML config file, relative to the working directory.
+
+    Returns:
+        Parsed configuration as a nested ``dict``.
+    """
     with open(path) as f:
         return yaml.safe_load(f)
 
 
 async def main():
+    """Async entry point: initialise all subsystems and run until a signal.
+
+    Start-up sequence:
+        1. Load ``config.yaml``.
+        2. Instantiate ``StateManager`` and ``LatestValueChannel``.
+        3. Open the DualSense HID device (exit with error if unavailable).
+        4. Open the virtual MIDI port.
+        5. Build the ``InputMapper`` and ``WebSocketServer``.
+        6. Install ``SIGINT``/``SIGTERM`` handlers that set ``stop_event``.
+        7. Set the controller LED to dim blue (ready indicator).
+        8. Launch the three asyncio tasks under supervision.
+        9. Await ``stop_event`` (blocks until Ctrl-C or ``SIGTERM``).
+
+    Shutdown sequence (after stop_event fires):
+        - Cancel all three tasks; gather to allow their ``finally`` blocks to
+          run (``return_exceptions=True`` prevents a second exception from
+          masking the first).
+        - Close the DualSense HID handle.
+        - Close the virtual MIDI port (removes it from the OS device list).
+    """
     config = load_config()
 
     from src.state import StateManager
@@ -149,6 +277,9 @@ async def main():
     # Signal handler for clean shutdown
     stop_event = asyncio.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
+        # add_signal_handler is used (not signal.signal) because it is
+        # asyncio-safe: the callback runs on the event loop thread rather
+        # than in a POSIX signal context where async operations would be unsafe.
         loop.add_signal_handler(sig, stop_event.set)
 
     controller.set_led_color(0, 0, 80)  # dim blue = ready
@@ -173,6 +304,8 @@ async def main():
     print("\nShutting down...")
     for t in tasks:
         t.cancel()
+    # return_exceptions=True ensures a CancelledError from one task does not
+    # prevent the others from being awaited and cleaned up.
     await asyncio.gather(*tasks, return_exceptions=True)
     controller.close()
     midi_bridge.close()
