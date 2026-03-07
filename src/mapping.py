@@ -10,23 +10,23 @@ Processing pipeline (``InputMapper.process``):
     b) Play/Pause    — L1/R1 bumpers (edge-triggered) → play_pause A/B
     c) Sticks        — left/right stick Y: per-deck volume accumulation
     d) Stick X macros — left stick X: macro_a bindings; right stick X: macro_b bindings
-    d) L3/R3 clicks  — normal: sync_toggle active/other; gyro active: cycle EffectUnit
-    e) D-Pad         — edge-triggered hot cues 1-4 on active deck
-    f) Face buttons  — edge-triggered hot cues 1-4 on other deck
-    g) Options press — deck_switch → A (cyan LED)
-    h) Create press  — deck_switch → B (magenta LED)
-    i) PS press      — deck_switch → both/mirror (white LED)
-    j2)Mute button   — gyro_toggle; captures accelerometer reference on enable
-    j) Touchpad      — direction-locked: horizontal→crossfader (relative delta,
+    e) L3/R3 clicks  — normal: sync_toggle active/other; gyro active: cycle EffectUnit
+    f) D-Pad         — edge-triggered hot cues 1-4 on active deck
+    g) Face buttons  — edge-triggered hot cues 1-4 on other deck
+    h) Options press — deck_switch → A (cyan LED)
+    i) Create press  — deck_switch → B (magenta LED)
+    j) PS press      — deck_switch → both/mirror (white LED)
+    k) Mute button   — gyro_toggle; captures accelerometer reference on enable
+    l) Touchpad      — direction-locked: horizontal→crossfader (relative delta,
                        no jump on touch), vertical→track browse (throttled)
-    k) Gyro          — accelerometer relative tilt → effect_wet_dry / effect_parameter
-    l) State update  — save current state as previous for next call
+    m) Gyro          — accelerometer relative tilt → effect_wet_dry / effect_parameter
+    n) State update  — save current state as previous for next call
 """
 
 import math
 from dataclasses import dataclass, field
 
-from .state import GyroBinding
+from .state import GyroBinding, MacroBinding
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +327,6 @@ class InputMapper:
 
     @staticmethod
     def _load_macro_bindings(raw: list) -> list:
-        from .state import MacroBinding
         return [
             MacroBinding(
                 control=b["control"],
@@ -339,7 +338,7 @@ class InputMapper:
             for b in raw
         ]
 
-    def update_macros(self, macro_a: list, macro_b: list):
+    def update_macros(self, macro_a: list[MacroBinding], macro_b: list[MacroBinding]):
         """Hot-swap macro bindings at runtime (called from server on UI update)."""
         self._macro_a = macro_a
         self._macro_b = macro_b
