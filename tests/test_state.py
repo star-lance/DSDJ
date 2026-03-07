@@ -173,6 +173,7 @@ def test_to_dict_returns_plain_dict():
 
 
 def test_macro_binding_defaults():
+    # Verify that explicitly-supplied values are stored correctly.
     b = MacroBinding(control="filter", deck="A", base=0.5, min_val=0.0, max_val=0.5)
     assert b.control == "filter"
     assert b.deck == "A"
@@ -180,10 +181,18 @@ def test_macro_binding_defaults():
     assert b.min_val == 0.0
     assert b.max_val == 0.5
 
+    # Verify class-level defaults when only required fields are provided.
+    b2 = MacroBinding(control="volume", deck="B")
+    assert b2.base == pytest.approx(0.5)
+    assert b2.min_val == pytest.approx(0.0)
+    assert b2.max_val == pytest.approx(1.0)
+
+
 def test_app_state_has_macros():
     s = AppState()
     assert isinstance(s.macro_a, list)
     assert isinstance(s.macro_b, list)
+
 
 def test_app_state_macro_defaults():
     s = AppState()

@@ -5,10 +5,12 @@ thread-safe wrapper (StateManager) that bridges the controller-input thread
 with the asyncio event loop.
 
 Responsibilities:
-    - ``GyroBinding``  -- maps a gyro axis to a specific Mixxx EffectUnit knob.
-    - ``DeckState``    -- snapshot of a single DJ deck's playback and mixer state.
-    - ``AppState``     -- top-level container that holds both decks plus global state.
-    - ``StateManager`` -- thread-safe read/write with an optional change callback.
+    - ``GyroBinding``   -- maps a gyro axis to a specific Mixxx EffectUnit knob.
+    - ``MacroBinding``  -- one parameter slot in a stick macro (control, deck, range).
+    - ``MACRO_CONTROLS``-- frozenset of valid control-name strings for MacroBinding.
+    - ``DeckState``     -- snapshot of a single DJ deck's playback and mixer state.
+    - ``AppState``      -- top-level container that holds both decks plus global state.
+    - ``StateManager``  -- thread-safe read/write with an optional change callback.
 
 Threading model:
     ``StateManager`` uses a single ``threading.Lock`` to protect ``AppState``
@@ -147,6 +149,8 @@ class AppState:
             (driven by pitch axis when gyro is enabled).
         gyro_roll_binding: Which EffectUnit/knob the roll axis controls.
         gyro_pitch_binding: Which EffectUnit/knob the pitch axis controls.
+        macro_a: List of MacroBinding slots driven by the left stick.
+        macro_b: List of MacroBinding slots driven by the right stick.
         ui_view: Current view name displayed in the React UI (e.g. ``"decks"``).
         connected: True once the DualSense has been successfully opened.
     """
@@ -164,10 +168,12 @@ class AppState:
     gyro_pitch_binding: GyroBinding = field(
         default_factory=lambda: GyroBinding(unit=1, target="parameter1")
     )
-    macro_a: list = field(default_factory=lambda: [
+    # max_val=0.5 is intentionally conservative vs the MacroBinding class default
+    # of max_val=1.0, to avoid an abrupt full-sweep on first use.
+    macro_a: list[MacroBinding] = field(default_factory=lambda: [
         MacroBinding(control="filter", deck="A", base=0.5, min_val=0.0, max_val=0.5)
     ])
-    macro_b: list = field(default_factory=lambda: [
+    macro_b: list[MacroBinding] = field(default_factory=lambda: [
         MacroBinding(control="filter", deck="B", base=0.5, min_val=0.0, max_val=0.5)
     ])
     active_deck: str = "A"   # "A", "B", or "both" (mirror mode) — governs hot cue routing
