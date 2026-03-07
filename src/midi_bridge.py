@@ -51,7 +51,6 @@ class MIDIBridge:
         "volume":           0x07,
         "crossfader":       0x08,
         "filter":           0x1A,
-        "pitch_nudge":      0x1B,
         "eq_low":           0x20,
         "eq_mid":           0x21,
         "eq_high":          0x22,
@@ -62,10 +61,11 @@ class MIDIBridge:
 
     # MIDI Note map: action_type -> note number
     _NOTE_MAP = {
-        "play_pause":   0x01,
-        "sync_toggle":  0x03,
-        "track_load":   0x04,
-        "loop_toggle":  0x20,
+        "play_pause":       0x01,
+        "sync_toggle":      0x03,
+        "track_load":       0x04,
+        "headphone_cue":    0x05,
+        "loop_toggle":      0x20,
     }
 
     _HOT_CUE_BASE = 0x10  # notes 0x10-0x13
@@ -194,7 +194,10 @@ class MIDIBridge:
             self.send_cc(channel, self._CC_MAP[t], midi_val)
 
         elif t in self._NOTE_MAP:
-            self.send_note_on(channel, self._NOTE_MAP[t])
+            if value > 0:
+                self.send_note_on(channel, self._NOTE_MAP[t])
+            else:
+                self.send_note_off(channel, self._NOTE_MAP[t])
 
         elif t == "hot_cue":
             idx = max(0, min(3, action.extra.get("cue_index", 1) - 1))
