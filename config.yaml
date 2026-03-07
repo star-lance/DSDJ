@@ -3,6 +3,8 @@ controller:
   deadzone: 0.08
   touchpad_crossfader_smoothing: 0.15
   direction_lock_threshold: 0.04
+  volume_sensitivity: 0.004        # Volume change per 250 Hz frame at full stick deflection.
+                                   # 0.004 ≈ 1 second of full-stick to traverse 0→1.
 
 midi:
   port_name: "DualSense DJ"
@@ -29,3 +31,17 @@ server:
   host: "127.0.0.1"
   port: 8765
   ui_port: 5173
+
+macros:
+  left_stick:
+    - control: "filter"
+      deck: "A"
+      base: 0.5
+      min_val: 0.0
+      max_val: 0.5
+  right_stick:
+    - control: "filter"
+      deck: "B"
+      base: 0.5
+      min_val: 0.0
+      max_val: 0.5
