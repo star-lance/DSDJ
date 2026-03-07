@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import MagicMock
 
-from src.state import AppState, DeckState, GyroBinding, StateManager
+from src.state import AppState, DeckState, GyroBinding, StateManager, MacroBinding
 
 
 # ---------------------------------------------------------------------------
@@ -165,3 +165,38 @@ def test_to_dict_returns_plain_dict():
     # Spot-check that nested values are also plain types, not dataclasses
     assert isinstance(result["deck_a"], dict)
     assert isinstance(result["gyro_roll_binding"], dict)
+
+
+# ---------------------------------------------------------------------------
+# MacroBinding
+# ---------------------------------------------------------------------------
+
+
+def test_macro_binding_defaults():
+    b = MacroBinding(control="filter", deck="A", base=0.5, min_val=0.0, max_val=0.5)
+    assert b.control == "filter"
+    assert b.deck == "A"
+    assert b.base == 0.5
+    assert b.min_val == 0.0
+    assert b.max_val == 0.5
+
+def test_app_state_has_macros():
+    s = AppState()
+    assert isinstance(s.macro_a, list)
+    assert isinstance(s.macro_b, list)
+
+def test_app_state_macro_defaults():
+    s = AppState()
+    assert len(s.macro_a) == 1
+    assert s.macro_a[0].control == "filter"
+    assert s.macro_a[0].deck == "A"
+    assert len(s.macro_b) == 1
+    assert s.macro_b[0].control == "filter"
+    assert s.macro_b[0].deck == "B"
+
+def test_to_dict_includes_macros():
+    sm = StateManager()
+    d = sm.to_dict()
+    assert "macro_a" in d
+    assert isinstance(d["macro_a"], list)
+    assert d["macro_a"][0]["control"] == "filter"

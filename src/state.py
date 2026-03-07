@@ -60,6 +60,31 @@ class GyroBinding:
         self.unit = (self.unit + 1) % 4
 
 
+MACRO_CONTROLS = {
+    "filter", "eq_low", "eq_mid", "eq_high",
+    "effect_wet_dry", "effect_parameter", "volume", "crossfader",
+}
+
+
+@dataclass
+class MacroBinding:
+    """One parameter slot in a stick macro.
+
+    Attributes:
+        control: Action type string — must be a key in MACRO_CONTROLS.
+        deck: Target deck — "A", "B", or "both".
+        base: Value sent when stick is at center (0.0–1.0).
+        min_val: Value sent at full left deflection (0.0–1.0).
+        max_val: Value sent at full right deflection (0.0–1.0).
+    """
+
+    control: str
+    deck: str
+    base: float = 0.5
+    min_val: float = 0.0
+    max_val: float = 1.0
+
+
 @dataclass
 class DeckState:
     """Snapshot of a single DJ deck's playback and mixer state.
@@ -139,6 +164,15 @@ class AppState:
     gyro_pitch_binding: GyroBinding = field(
         default_factory=lambda: GyroBinding(unit=1, target="parameter1")
     )
+    macro_a: list = field(default_factory=lambda: [
+        MacroBinding(control="filter", deck="A", base=0.5, min_val=0.0, max_val=0.5)
+    ])
+    macro_b: list = field(default_factory=lambda: [
+        MacroBinding(control="filter", deck="B", base=0.5, min_val=0.0, max_val=0.5)
+    ])
+    active_deck: str = "A"   # "A", "B", or "both" (mirror mode) — governs hot cue routing
+    deck_a_cue: bool = False  # True when Deck A is routed to headphone monitor
+    deck_b_cue: bool = False  # True when Deck B is routed to headphone monitor
     ui_view: str = "decks"
     connected: bool = False
 
@@ -271,6 +305,13 @@ class StateManager:
             elif t == "hot_cue":
                 idx = max(0, min(3, action.extra.get("cue_index", 1) - 1))
                 deck_state().hot_cues[idx] = True
+            elif t == "deck_switch":
+                self._state.active_deck = d
+            elif t == "headphone_cue":
+                if d == "A":
+                    self._state.deck_a_cue = not self._state.deck_a_cue
+                elif d == "B":
+                    self._state.deck_b_cue = not self._state.deck_b_cue
             elif t == "gyro_toggle":
                 self._state.gyro_enabled = bool(v)
             elif t == "effect_wet_dry":
