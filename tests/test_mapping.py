@@ -3,6 +3,7 @@
 import time
 import pytest
 
+from src.state import MacroBinding
 from src.mapping import (
     DJAction,
     detect_edge,
@@ -164,12 +165,87 @@ def _blank_state(**overrides) -> ControllerState:
 def _config():
     return {
         "controller": {"deadzone": 0.08, "touchpad_crossfader_smoothing": 0.15,
-                       "direction_lock_threshold": 0.04},
+                       "direction_lock_threshold": 0.04, "volume_sensitivity": 0.004},
         "filter": {"stick_curve": "linear", "stick_exponent": 2.0},
         "gyro": {"roll_unit": 0, "roll_target": "mix",
                  "pitch_unit": 1, "pitch_target": "parameter1",
                  "tilt_range_degrees": 45.0},
     }
+
+
+def _macro_config():
+    cfg = _config()
+    cfg["macros"] = {
+        "left_stick": [
+            {"control": "filter", "deck": "A", "base": 0.5, "min_val": 0.0, "max_val": 1.0}
+        ],
+        "right_stick": [
+            {"control": "filter", "deck": "B", "base": 0.5, "min_val": 0.0, "max_val": 1.0}
+        ],
+    }
+    return cfg
+
+
+def test_macro_center_emits_base_on_change():
+    """Moving stick from non-center to center should emit base value."""
+    mapper = InputMapper(_macro_config())
+    # Prime with stick pushed right
+    mapper.process(_blank_state(left_stick_x=0.9))
+    # Return to center — should emit base
+    actions = mapper.process(_blank_state(left_stick_x=0.0))
+    f = next((a for a in actions if a.action_type == "filter" and a.deck == "A"), None)
+    assert f is not None
+    assert f.value == pytest.approx(0.5, abs=0.02)
+
+
+def test_macro_full_right_emits_max():
+    mapper = InputMapper(_macro_config())
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(left_stick_x=1.0))
+    f = next((a for a in actions if a.action_type == "filter" and a.deck == "A"), None)
+    assert f is not None
+    assert f.value == pytest.approx(1.0, abs=0.02)
+
+
+def test_macro_full_left_emits_min():
+    mapper = InputMapper(_macro_config())
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(left_stick_x=-1.0))
+    f = next((a for a in actions if a.action_type == "filter" and a.deck == "A"), None)
+    assert f is not None
+    assert f.value == pytest.approx(0.0, abs=0.02)
+
+
+def test_macro_no_emit_when_value_unchanged():
+    """If stick doesn't move enough to change interpolated value, no action emitted."""
+    mapper = InputMapper(_macro_config())
+    mapper.process(_blank_state())
+    mapper.process(_blank_state(left_stick_x=0.5))
+    # Same stick position again — value hasn't changed, no emit
+    actions = mapper.process(_blank_state(left_stick_x=0.5))
+    f = [a for a in actions if a.action_type == "filter" and a.deck == "A"]
+    assert len(f) == 0
+
+
+def test_macro_deck_both_emits_two_actions():
+    cfg = _macro_config()
+    cfg["macros"]["left_stick"][0]["deck"] = "both"
+    mapper = InputMapper(cfg)
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(left_stick_x=1.0))
+    filters = [a for a in actions if a.action_type == "filter"]
+    assert len(filters) == 2
+    assert {a.deck for a in filters} == {"A", "B"}
+
+
+def test_macro_update_replaces_bindings():
+    mapper = InputMapper(_macro_config())
+    new_bindings_a = [MacroBinding(control="eq_high", deck="A", base=0.5, min_val=0.0, max_val=1.0)]
+    mapper.update_macros(new_bindings_a, mapper._macro_b)
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(left_stick_x=1.0))
+    assert any(a.action_type == "eq_high" for a in actions)
+    assert not any(a.action_type == "filter" for a in actions)
 
 
 def test_l1_press_emits_play_pause_deck_a():
@@ -182,13 +258,34 @@ def test_l1_press_emits_play_pause_deck_a():
     assert play.deck == "A"
 
 
-def test_l2_analog_emits_volume_deck_a():
+def test_l2_kills_deck_a_eq_low():
+    """L2 fully squeezed should cut Deck A LOW EQ to zero."""
     mapper = InputMapper(_config())
     mapper.process(_blank_state())
-    actions = mapper.process(_blank_state(l2_analog=0.8))
-    vol = next((a for a in actions if a.action_type == "volume" and a.deck == "A"), None)
-    assert vol is not None
-    assert vol.value == pytest.approx(0.8, abs=0.01)
+    actions = mapper.process(_blank_state(l2_analog=1.0))
+    eq = next((a for a in actions if a.action_type == "eq_low" and a.deck == "A"), None)
+    assert eq is not None
+    assert eq.value == pytest.approx(0.0, abs=0.01)
+
+
+def test_l2_release_restores_deck_a_eq_low():
+    """Releasing L2 after a kill should emit eq_low=0.5 (flat) for Deck A."""
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    mapper.process(_blank_state(l2_analog=1.0))   # squeeze
+    actions = mapper.process(_blank_state(l2_analog=0.0))  # release
+    eq = next((a for a in actions if a.action_type == "eq_low" and a.deck == "A"), None)
+    assert eq is not None
+    assert eq.value == pytest.approx(0.5, abs=0.01)
+
+
+def test_left_stick_y_accumulates_deck_a_volume():
+    """Pushing left stick up should increase Deck A volume."""
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    vol_before = mapper._deck_a_volume
+    mapper.process(_blank_state(left_stick_y=1.0))
+    assert mapper._deck_a_volume > vol_before
 
 
 def test_dpad_up_emits_hot_cue_1_deck_a():
@@ -208,11 +305,13 @@ def test_mute_toggles_gyro():
     assert gyro is not None
 
 
-def test_options_held_sets_eq_mode():
+def test_options_press_switches_to_deck_a():
     mapper = InputMapper(_config())
+    mapper.active_deck = "B"
     mapper.process(_blank_state())
-    mapper.process(_blank_state(options=True))
-    assert mapper.eq_mode is True
+    actions = mapper.process(_blank_state(options=True))
+    assert mapper.active_deck == "A"
+    assert any(a.action_type == "deck_switch" and a.deck == "A" for a in actions)
 
 
 def test_l3_in_gyro_mode_cycles_roll_binding():
@@ -263,12 +362,42 @@ def test_face_buttons_emit_hot_cue_deck_b():
     assert cue.extra["cue_index"] == 1
 
 
-def test_create_emits_loop_toggle():
+def test_create_press_switches_to_deck_b():
     mapper = InputMapper(_config())
     mapper.process(_blank_state())
     actions = mapper.process(_blank_state(create=True))
-    loop = next((a for a in actions if a.action_type == "loop_toggle"), None)
-    assert loop is not None
+    assert mapper.active_deck == "B"
+    assert any(a.action_type == "deck_switch" and a.deck == "B" for a in actions)
+
+
+def test_ps_press_switches_to_mirror():
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(ps=True))
+    assert mapper.active_deck == "both"
+    assert any(a.action_type == "deck_switch" and a.deck == "both" for a in actions)
+
+
+def test_mirror_mode_hot_cues_emit_for_both_decks():
+    """In mirror mode, D-pad hot cues should fire on both decks."""
+    mapper = InputMapper(_config())
+    mapper.active_deck = "both"
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(dpad_up=True))
+    cue_actions = [a for a in actions if a.action_type == "hot_cue"]
+    assert len(cue_actions) == 2
+    assert {a.deck for a in cue_actions} == {"A", "B"}
+
+
+def test_l1_always_targets_deck_a_regardless_of_active_deck():
+    """L1 should always emit play_pause for Deck A even when active deck is B."""
+    mapper = InputMapper(_config())
+    mapper.active_deck = "B"
+    mapper.process(_blank_state())
+    actions = mapper.process(_blank_state(l1=True))
+    play = next((a for a in actions if a.action_type == "play_pause"), None)
+    assert play is not None
+    assert play.deck == "A"
 
 
 def test_touchpad_horizontal_emits_crossfader():
@@ -280,6 +409,19 @@ def test_touchpad_horizontal_emits_crossfader():
     actions = mapper.process(_blank_state(touchpad_active=True, touchpad_finger1_x=0.56, touchpad_finger1_y=0.5))
     cf = next((a for a in actions if a.action_type == "crossfader"), None)
     assert cf is not None
+
+
+def test_crossfader_relative_no_jump():
+    """Placing finger at an extreme X should not jump the crossfader."""
+    mapper = InputMapper(_config())
+    mapper.process(_blank_state())
+    # Crossfader starts at 0.5. Place finger at far right (0.9) — should not jump.
+    mapper.process(_blank_state(touchpad_active=True, touchpad_finger1_x=0.9, touchpad_finger1_y=0.5))
+    actions = mapper.process(_blank_state(touchpad_active=True, touchpad_finger1_x=0.96, touchpad_finger1_y=0.5))
+    cf = next((a for a in actions if a.action_type == "crossfader"), None)
+    # Value should be near 0.5 + delta (0.06), not 0.96
+    assert cf is not None
+    assert cf.value < 0.7
 
 
 def test_track_browse_throttled():
