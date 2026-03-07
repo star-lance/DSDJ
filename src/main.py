@@ -317,8 +317,7 @@ async def main():
 
     midi_bridge = MIDIBridge(config["midi"]["port_name"])
     mapper_ref = [InputMapper(config)]
-    # TODO (Task 6): add mapper_ref=mapper_ref here once WebSocketServer accepts it
-    ws_server = WebSocketServer(state_manager, state_channel, config["server"])
+    ws_server = WebSocketServer(state_manager, state_channel, config["server"], mapper_ref=mapper_ref)
 
     loop = asyncio.get_running_loop()
 

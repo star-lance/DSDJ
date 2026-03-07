@@ -26,7 +26,7 @@ Broadcast pattern:
 import asyncio
 import json
 import logging
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -53,7 +53,7 @@ class WebSocketServer:
         _app: The ``FastAPI`` application instance with routes attached.
     """
 
-    def __init__(self, state_manager, state_channel, config: dict):
+    def __init__(self, state_manager, state_channel, config: dict, mapper_ref=None):
         """Initialise the server and register FastAPI routes.
 
         Args:
@@ -64,9 +64,13 @@ class WebSocketServer:
             config: Server configuration sub-dict (the ``server`` section of
                 ``config.yaml``).  Expected keys: ``host`` (default
                 ``"127.0.0.1"``) and ``port`` (default ``8765``).
+            mapper_ref: Optional one-element list holding the live
+                ``InputMapper`` instance.  When provided, ``POST /macros``
+                calls ``mapper_ref[0].update_macros()`` to hot-swap bindings.
         """
         self._state_manager = state_manager
         self._state_channel = state_channel
+        self._mapper_ref = mapper_ref
         self._host = config.get("host", "127.0.0.1")
         self._port = config.get("port", 8765)
         self._connections: list[WebSocket] = []
@@ -85,6 +89,38 @@ class WebSocketServer:
         @self._app.websocket("/ws")
         async def ws_endpoint(websocket: WebSocket):
             await self._handle_connection(websocket)
+
+        @self._app.get("/macros")
+        async def get_macros():
+            from fastapi.responses import JSONResponse
+            state = self._state_manager.to_dict()
+            return JSONResponse({"macro_a": state["macro_a"], "macro_b": state["macro_b"]})
+
+        @self._app.post("/macros")
+        async def post_macros(request: Request):
+            from fastapi.responses import JSONResponse
+            from .state import MacroBinding
+            body = await request.json()
+
+            def parse_bindings(raw):
+                return [MacroBinding(
+                    control=b["control"], deck=b["deck"],
+                    base=float(b.get("base", 0.5)),
+                    min_val=float(b.get("min_val", 0.0)),
+                    max_val=float(b.get("max_val", 1.0)),
+                ) for b in raw]
+
+            macro_a = parse_bindings(body.get("macro_a", []))
+            macro_b = parse_bindings(body.get("macro_b", []))
+
+            if self._mapper_ref is not None:
+                self._mapper_ref[0].update_macros(macro_a, macro_b)
+
+            self._state_manager.update(
+                macro_a=macro_a,
+                macro_b=macro_b,
+            )
+            return JSONResponse({"ok": True})
 
         # Serve built React UI — only if the dist folder exists
         import os
@@ -190,7 +226,7 @@ class WebSocketServer:
             host=self._host,
             port=self._port,
             log_level="warning",
-            install_signal_handlers=False,
         )
         server = uvicorn.Server(config)
+        server.install_signal_handlers = False
         await server.serve()
