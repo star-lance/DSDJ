@@ -4,6 +4,7 @@ import { Crossfader } from './components/Crossfader'
 import { EffectsPanel } from './components/EffectsPanel'
 import { ControllerMap } from './components/ControllerMap'
 import { Library } from './components/Library'
+import { MacroEditor } from './components/MacroEditor'
 
 const WS_URL = `ws://${window.location.hostname}:8765/ws`
 
@@ -33,6 +34,8 @@ export default function App() {
         rollBinding={state.gyro_roll_binding}
         pitchBinding={state.gyro_pitch_binding}
       />
+
+      <MacroEditor macroA={state.macro_a ?? []} macroB={state.macro_b ?? []} />
 
       <div className="grid grid-cols-2 gap-3">
         <ControllerMap eqMode={state.eq_mode} gyroEnabled={state.gyro_enabled} />
