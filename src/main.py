@@ -27,7 +27,9 @@ Signal handling:
 
 import asyncio
 import logging
+import os
 import signal
+import subprocess
 import sys
 import time
 
@@ -94,7 +96,7 @@ class LatestValueChannel:
 # ---------------------------------------------------------------------------
 
 
-async def controller_loop(controller, mapper, midi_bridge, state_manager, state_channel, loop):
+async def controller_loop(controller, mapper_ref, midi_bridge, state_manager, state_channel, loop):
     """Poll the DualSense at 250 Hz, map inputs, send MIDI, and push state.
 
     Runs as a long-lived coroutine under ``supervised_task``.  Each iteration:
@@ -125,22 +127,47 @@ async def controller_loop(controller, mapper, midi_bridge, state_manager, state_
     while True:
         t_start = loop.time()
 
+        # Check for USB disconnect (pydualsense sets connected=False when IOError)
+        if not controller.is_connected:
+            log.warning("DualSense disconnected. Attempting reconnect...")
+            state_manager.update(connected=False)
+            while True:
+                try:
+                    await loop.run_in_executor(None, controller.reconnect)
+                    controller.set_led_color(0, 200, 200)
+                    state_manager.update(connected=True)
+                    log.info("DualSense reconnected.")
+                    break
+                except Exception as e:
+                    log.warning(f"Reconnect failed: {e}. Retrying in 2s...")
+                    await asyncio.sleep(2.0)
+
         # Blocking HID read — run in thread pool
         ctrl_state = await loop.run_in_executor(None, controller.read_state)
 
         # Map to actions (pure computation — no I/O)
+        mapper = mapper_ref[0]
         actions = mapper.process(ctrl_state)
 
-        # Send MIDI (microsecond blocking calls — acceptable direct call)
+        # Send MIDI and handle side-effects (microsecond blocking calls — acceptable)
         for action in actions:
-            midi_bridge.send_action(
-                action,
-                binding=(
-                    mapper.gyro_roll_binding if action.action_type == "effect_wet_dry"
-                    else mapper.gyro_pitch_binding if action.action_type == "effect_parameter"
-                    else None
+            if action.action_type == "deck_switch":
+                # Update controller LED to reflect active deck
+                if action.deck == "A":
+                    controller.set_led_color(0, 200, 200)    # cyan
+                elif action.deck == "B":
+                    controller.set_led_color(200, 0, 200)    # magenta
+                else:
+                    controller.set_led_color(200, 200, 200)  # white (mirror)
+            else:
+                midi_bridge.send_action(
+                    action,
+                    binding=(
+                        mapper.gyro_roll_binding if action.action_type == "effect_wet_dry"
+                        else mapper.gyro_pitch_binding if action.action_type == "effect_parameter"
+                        else None
+                    )
                 )
-            )
 
         # Update internal state
         for action in actions:
@@ -253,23 +280,44 @@ async def main():
     """
     config = load_config()
 
-    from src.state import StateManager
-    from src.controller import DualSenseController
-    from src.midi_bridge import MIDIBridge
-    from src.mapping import InputMapper
-    from src.server import WebSocketServer
+    from .state import StateManager
+    from .controller import DualSenseController
+    from .midi_bridge import MIDIBridge
+    from .mapping import InputMapper
+    from .server import WebSocketServer
 
     state_manager = StateManager()
     state_channel = LatestValueChannel()
 
-    try:
-        controller = DualSenseController(config["controller"])
-    except Exception as e:
-        print(f"ERROR: Could not connect to DualSense controller: {e}")
-        sys.exit(1)
+    controller = None
+    while controller is None:
+        try:
+            controller = DualSenseController(config["controller"])
+        except Exception as e:
+            print(f"DualSense not found ({e}). Retrying in 2s...")
+            await asyncio.sleep(2.0)
+
+    state_manager.update(connected=True)
+
+    # Seed macro state from config so UI reflects initial bindings on first connect
+    from .state import MacroBinding as _MacroBinding
+
+    def _bindings_from_config(raw):
+        return [_MacroBinding(control=b["control"], deck=b["deck"],
+                              base=float(b.get("base", 0.5)),
+                              min_val=float(b.get("min_val", 0.0)),
+                              max_val=float(b.get("max_val", 1.0)))
+                for b in raw]
+
+    macro_cfg = config.get("macros", {})
+    state_manager.update(
+        macro_a=_bindings_from_config(macro_cfg.get("left_stick", [])),
+        macro_b=_bindings_from_config(macro_cfg.get("right_stick", [])),
+    )
 
     midi_bridge = MIDIBridge(config["midi"]["port_name"])
-    mapper = InputMapper(config)
+    mapper_ref = [InputMapper(config)]
+    # TODO (Task 6): add mapper_ref=mapper_ref here once WebSocketServer accepts it
     ws_server = WebSocketServer(state_manager, state_channel, config["server"])
 
     loop = asyncio.get_running_loop()
@@ -277,29 +325,86 @@ async def main():
     # Signal handler for clean shutdown
     stop_event = asyncio.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        # add_signal_handler is used (not signal.signal) because it is
-        # asyncio-safe: the callback runs on the event loop thread rather
-        # than in a POSIX signal context where async operations would be unsafe.
         loop.add_signal_handler(sig, stop_event.set)
 
-    controller.set_led_color(0, 0, 80)  # dim blue = ready
-    print(f"DualSense DJ ready. Connect Mixxx to '{config['midi']['port_name']}' MIDI device.")
+    async def reload_mapper():
+        import importlib
+        import shutil
+        import src.mapping as mapping_module
+        importlib.reload(mapping_module)
+        new_config = load_config()
+        mapper_ref[0] = mapping_module.InputMapper(new_config)
+        state_manager.update(
+            macro_a=mapper_ref[0]._macro_a,
+            macro_b=mapper_ref[0]._macro_b,
+        )
+        # Keep Mixxx's copy of the XML in sync with the project file
+        xml_src = os.path.join(os.path.dirname(__file__), "mixxx", "midi_mapping.xml")
+        xml_dst = os.path.expanduser("~/.mixxx/controllers/DualSense-DJ.midi.xml")
+        if os.path.exists(xml_src):
+            shutil.copy2(xml_src, xml_dst)
+        print("\n  \033[1;32mMapper reloaded.\033[0m\n")
 
-    tasks = [
-        asyncio.create_task(
-            supervised_task(
-                lambda: controller_loop(controller, mapper, midi_bridge,
-                                        state_manager, state_channel, loop),
-                "controller"
-            )
-        ),
-        asyncio.create_task(
-            supervised_task(lambda: broadcast_loop(state_channel, ws_server), "broadcast")
-        ),
-        asyncio.create_task(ws_server.serve()),
-    ]
+    loop.add_signal_handler(signal.SIGUSR1, lambda: asyncio.create_task(reload_mapper()))
 
-    await stop_event.wait()
+    controller.set_led_color(0, 200, 200)  # cyan = Deck A active
+    host = config["server"]["host"]
+    port = config["server"]["port"]
+    url = f"http://{host}:{port}"
+    midi_port = config["midi"]["port_name"]
+    print()
+    print("  \033[1;36mDualSense DJ\033[0m  ready")
+    print(f"  MIDI  →  \033[1m{midi_port}\033[0m")
+    print(f"  UI    →  \033[1;4;34m{url}\033[0m  \033[2m(O = open browser, R = reload mapper)\033[0m")
+    print()
+
+    def _open_browser():
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    import atexit, select
+    _stdin_is_tty = sys.stdin.isatty()
+
+    if _stdin_is_tty:
+        import tty, termios
+        old_term = termios.tcgetattr(sys.stdin)
+        atexit.register(termios.tcsetattr, sys.stdin, termios.TCSADRAIN, old_term)
+        tty.setcbreak(sys.stdin.fileno())
+
+    def _check_keypress():
+        """Non-blocking stdin check; returns pressed char or None."""
+        if not _stdin_is_tty:
+            return None
+        if select.select([sys.stdin], [], [], 0)[0]:
+            return sys.stdin.read(1)
+        return None
+
+    try:
+        tasks = [
+            asyncio.create_task(
+                supervised_task(
+                    lambda: controller_loop(controller, mapper_ref, midi_bridge,
+                                            state_manager, state_channel, loop),
+                    "controller"
+                )
+            ),
+            asyncio.create_task(
+                supervised_task(lambda: broadcast_loop(state_channel, ws_server), "broadcast")
+            ),
+            asyncio.create_task(
+                supervised_task(lambda: ws_server.serve(), "server")
+            ),
+        ]
+
+        while not stop_event.is_set():
+            key = _check_keypress()
+            if key and key.lower() == "o":
+                _open_browser()
+            elif key and key.lower() == "r":
+                await reload_mapper()
+            await asyncio.sleep(0.1)
+    finally:
+        if _stdin_is_tty:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_term)
 
     print("\nShutting down...")
     for t in tasks:
