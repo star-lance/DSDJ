@@ -134,8 +134,10 @@ async def controller_loop(controller, mapper_ref, midi_bridge, state_manager, st
             while True:
                 try:
                     await loop.run_in_executor(None, controller.reconnect)
-                    midi_bridge.reopen()
                     controller.set_led_color(0, 200, 200)
+                    # Clear the mapper's last-sent cache so the next frame
+                    # re-emits all macro values to Mixxx, resyncing its state.
+                    mapper_ref[0]._macro_last.clear()
                     state_manager.update(connected=True)
                     log.info("DualSense reconnected.")
                     break
@@ -143,8 +145,15 @@ async def controller_loop(controller, mapper_ref, midi_bridge, state_manager, st
                     log.warning(f"Reconnect failed: {e}. Retrying in 2s...")
                     await asyncio.sleep(2.0)
 
-        # Blocking HID read — run in thread pool
-        ctrl_state = await loop.run_in_executor(None, controller.read_state)
+        # Blocking HID read — run in thread pool.  Wrapped individually so a
+        # transient read error after reconnect (pydualsense HID thread not yet
+        # settled) is logged and skipped rather than crashing controller_loop
+        # and triggering a 2-second supervised_task restart.
+        try:
+            ctrl_state = await loop.run_in_executor(None, controller.read_state)
+        except Exception as e:
+            log.warning(f"read_state error (transient?): {e}")
+            continue
 
         # Map to actions (pure computation — no I/O)
         mapper = mapper_ref[0]
