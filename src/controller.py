@@ -33,11 +33,12 @@ import pydualsense
 def normalize_stick(raw: int, deadzone: float) -> float:
     """Convert a raw 0-255 stick byte to a deadzone-filtered −1.0..1.0 float.
 
-    The DualSense reports each stick axis as an unsigned byte where 128 is the
-    mechanical centre.  This function performs three steps:
+    The pydualsense library exposes stick axes as signed integers in the range
+    −128..127 where 0 is the mechanical centre.  This function performs three
+    steps:
 
-    1. **Centre and scale**: ``value = (raw - 128) / 128.0``
-       Maps the byte range [0, 255] to approximately [−1.0, 1.0].
+    1. **Scale**: ``value = raw / 128.0``
+       Maps the range [−128, 127] to approximately [−1.0, 1.0].
     2. **Deadzone gate**: if ``|value| < deadzone`` return 0.0.
        Eliminates the natural mechanical drift around the centre position.
     3. **Deadzone rescale**: ``sign * (|value| - deadzone) / (1.0 - deadzone)``
@@ -47,14 +48,14 @@ def normalize_stick(raw: int, deadzone: float) -> float:
        discontinuity at the deadzone boundary.
 
     Args:
-        raw: Raw unsigned byte from the HID report (0-255).
+        raw: Signed integer from pydualsense (−128..127, centre = 0).
         deadzone: Fraction of the full range to treat as zero (e.g. 0.08).
 
     Returns:
         Normalised stick value in the range −1.0..1.0, or exactly 0.0 when
         inside the deadzone.
     """
-    value = (raw - 128) / 128.0
+    value = raw / 128.0
     if abs(value) < deadzone:
         return 0.0
     # >= (not >) intentional: correctly handles zero-deadzone edge case
@@ -248,6 +249,12 @@ class DualSenseController:
         # outer pydualsense = module, inner pydualsense = class name (both happen to be the same)
         self._ds = pydualsense.pydualsense()
         self._ds.init()
+        # Wait for the HID thread to deliver the first real report.
+        # pydualsense initializes stick axes to 128 (unsigned) before any HID
+        # data arrives; the first real report switches to signed values (0=center).
+        # Without this sleep the first read_state() call returns stale 128 values,
+        # which normalize_stick would map to 1.0 instead of 0.0.
+        time.sleep(0.15)
 
     def read_state(self) -> ControllerState:
         """Read pydualsense state and return a normalized ControllerState.
@@ -278,8 +285,8 @@ class DualSenseController:
             l3=bool(s.L3),
             r3=bool(s.R3),
             # Triggers
-            l2_analog=normalize_trigger(s.L2),
-            r2_analog=normalize_trigger(s.R2),
+            l2_analog=normalize_trigger(s.L2_value),
+            r2_analog=normalize_trigger(s.R2_value),
             # Bumpers
             l1=bool(s.L1),
             r1=bool(s.R1),
@@ -294,9 +301,9 @@ class DualSenseController:
             cross=bool(s.cross),
             square=bool(s.square),
             # Center buttons
-            create=bool(s.create),
+            create=bool(s.share),
             options=bool(s.options),
-            mute=bool(s.mute),
+            mute=bool(s.micBtn),
             ps=bool(s.ps),
             # Touchpad finger 1
             touchpad_active=bool(touch0.isActive),
@@ -307,11 +314,11 @@ class DualSenseController:
             touchpad_finger2_x=normalize_touchpad(touch1.X, _TOUCHPAD_MAX_X),
             touchpad_finger2_y=normalize_touchpad(touch1.Y, _TOUCHPAD_MAX_Y),
             # Touchpad click
-            touchpad_click=bool(s.touchpad),
+            touchpad_click=bool(s.touchBtn),
             # Gyro
-            gyro_x=float(s.gyro.X),
-            gyro_y=float(s.gyro.Y),
-            gyro_z=float(s.gyro.Z),
+            gyro_x=float(s.gyro.Pitch),
+            gyro_y=float(s.gyro.Yaw),
+            gyro_z=float(s.gyro.Roll),
             # Accelerometer
             accel_x=float(s.accelerometer.X),
             accel_y=float(s.accelerometer.Y),
@@ -319,6 +326,25 @@ class DualSenseController:
             # Timestamp
             timestamp=time.monotonic(),
         )
+
+    @property
+    def is_connected(self) -> bool:
+        """Return False if pydualsense's read thread has died (USB disconnect)."""
+        return bool(getattr(self._ds, "connected", True))
+
+    def reconnect(self):
+        """Close the current pydualsense instance and open a fresh one.
+
+        Called by the controller loop when a disconnect is detected.
+        Raises the same exceptions as __init__ if no device is found.
+        """
+        try:
+            self._ds.close()
+        except Exception:
+            pass
+        self._ds = pydualsense.pydualsense()
+        self._ds.init()
+        time.sleep(0.15)
 
     def set_led_color(self, r: int, g: int, b: int):
         """Set the DualSense lightbar color.

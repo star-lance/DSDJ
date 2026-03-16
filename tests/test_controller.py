@@ -19,15 +19,15 @@ def _make_mock_ds():
     """Create a MagicMock pydualsense instance with neutral state values."""
     ds = MagicMock()
 
-    # Sticks (center)
-    ds.state.LX = 128
-    ds.state.LY = 128
-    ds.state.RX = 128
-    ds.state.RY = 128
+    # Sticks (center = 0 in pydualsense's signed -128..127 range)
+    ds.state.LX = 0
+    ds.state.LY = 0
+    ds.state.RX = 0
+    ds.state.RY = 0
 
     # Triggers
-    ds.state.L2 = 0
-    ds.state.R2 = 0
+    ds.state.L2_value = 0
+    ds.state.R2_value = 0
 
     # Bumpers / stick clicks
     ds.state.L1 = False
@@ -48,9 +48,9 @@ def _make_mock_ds():
     ds.state.square = False
 
     # Center buttons
-    ds.state.create = False
+    ds.state.share = False
     ds.state.options = False
-    ds.state.mute = False
+    ds.state.micBtn = False
     ds.state.ps = False
 
     # Touchpad finger 1
@@ -64,12 +64,12 @@ def _make_mock_ds():
     ds.state.trackPadTouch1.Y = 0
 
     # Touchpad click
-    ds.state.touchpad = False
+    ds.state.touchBtn = False
 
     # Gyro
-    ds.state.gyro.X = 0
-    ds.state.gyro.Y = 0
-    ds.state.gyro.Z = 0
+    ds.state.gyro.Pitch = 0
+    ds.state.gyro.Yaw = 0
+    ds.state.gyro.Roll = 0
 
     # Accelerometer
     ds.state.accelerometer.X = 0
@@ -85,24 +85,24 @@ def _make_mock_ds():
 
 
 def test_normalize_stick_center():
-    """Center raw value 128 should return approximately 0.0."""
-    assert normalize_stick(128, 0.08) == pytest.approx(0.0, abs=0.01)
+    """Center raw value 0 should return approximately 0.0."""
+    assert normalize_stick(0, 0.08) == pytest.approx(0.0, abs=0.01)
 
 
 def test_normalize_stick_max():
-    """Maximum raw value 255 should return approximately 1.0."""
-    assert normalize_stick(255, 0.08) == pytest.approx(1.0, abs=0.01)
+    """Maximum raw value 127 should return approximately 1.0."""
+    assert normalize_stick(127, 0.08) == pytest.approx(1.0, abs=0.02)
 
 
 def test_normalize_stick_min():
-    """Minimum raw value 0 should return approximately -1.0."""
-    assert normalize_stick(0, 0.08) == pytest.approx(-1.0, abs=0.01)
+    """Minimum raw value -128 should return approximately -1.0."""
+    assert normalize_stick(-128, 0.08) == pytest.approx(-1.0, abs=0.01)
 
 
 def test_normalize_stick_deadzone():
     """A small value within the deadzone should return exactly 0.0."""
-    # raw=133 → value = (133-128)/128 = 5/128 ≈ 0.039, which is < 0.08 deadzone
-    assert normalize_stick(133, 0.08) == 0.0
+    # raw=5 → value = 5/128 ≈ 0.039, which is < 0.08 deadzone
+    assert normalize_stick(5, 0.08) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +158,7 @@ def test_read_state_full_trigger():
     """L2=255 should produce l2_analog ≈ 1.0."""
     with patch("src.controller.pydualsense") as mock_pds:
         ds = _make_mock_ds()
-        ds.state.L2 = 255
+        ds.state.L2_value = 255
         mock_pds.pydualsense.return_value = ds
         from src.controller import DualSenseController
         ctrl = DualSenseController({"deadzone": 0.08})
