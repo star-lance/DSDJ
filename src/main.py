@@ -134,6 +134,7 @@ async def controller_loop(controller, mapper_ref, midi_bridge, state_manager, st
             while True:
                 try:
                     await loop.run_in_executor(None, controller.reconnect)
+                    midi_bridge.reopen()
                     controller.set_led_color(0, 200, 200)
                     state_manager.update(connected=True)
                     log.info("DualSense reconnected.")

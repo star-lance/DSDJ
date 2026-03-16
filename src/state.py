@@ -168,13 +168,11 @@ class AppState:
     gyro_pitch_binding: GyroBinding = field(
         default_factory=lambda: GyroBinding(unit=1, target="parameter1")
     )
-    # max_val=0.5 is intentionally conservative vs the MacroBinding class default
-    # of max_val=1.0, to avoid an abrupt full-sweep on first use.
     macro_a: list[MacroBinding] = field(default_factory=lambda: [
-        MacroBinding(control="filter", deck="A", base=0.5, min_val=0.0, max_val=0.5)
+        MacroBinding(control="filter", deck="A", base=0.5, min_val=0.0, max_val=1.0)
     ])
     macro_b: list[MacroBinding] = field(default_factory=lambda: [
-        MacroBinding(control="filter", deck="B", base=0.5, min_val=0.0, max_val=0.5)
+        MacroBinding(control="filter", deck="B", base=0.5, min_val=0.0, max_val=1.0)
     ])
     active_deck: str = "A"   # "A", "B", or "both" (mirror mode) — governs hot cue routing
     deck_a_cue: bool = False  # True when Deck A is routed to headphone monitor

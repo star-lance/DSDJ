@@ -273,7 +273,10 @@ class InputMapper:
         self._stick_curve = config["filter"]["stick_curve"]
         self._stick_exponent = config["filter"]["stick_exponent"]
         self._tilt_range = config["gyro"]["tilt_range_degrees"]
+        self._gyro_smoothing = config["gyro"].get("smoothing", 0.55)
         self.gyro_reference = None  # (accel_x, accel_y, accel_z) at gyro enable
+        self._gyro_smooth_roll: float = 0.5
+        self._gyro_smooth_pitch: float = 0.5
         self._last_browse_time = 0.0
         # Load macro bindings from config
         self._macro_a: list = self._load_macro_bindings(
@@ -544,16 +547,23 @@ class InputMapper:
         # ------------------------------------------------------------------
         if self.gyro_enabled and self.gyro_reference is not None:
             ref_x, ref_y, ref_z = self.gyro_reference
-            # Compute tilt angles relative to the reference position.
-            # atan2 returns values in [-π, π]; we expect small angles here.
-            roll_angle = math.atan2(state.accel_x - ref_x, ref_z)
-            pitch_angle = math.atan2(state.accel_y - ref_y, ref_z)
+            # Use the gravity magnitude at reference time as the denominator so
+            # the formula stays stable regardless of how the controller is held.
+            # atan2(delta_lateral, g_ref) gives the tilt angle in radians away
+            # from the reference orientation; scale-invariant w.r.t. sensor units.
+            g_ref = math.sqrt(ref_x ** 2 + ref_y ** 2 + ref_z ** 2) or 1.0
+            roll_angle = math.atan2(state.accel_x - ref_x, g_ref)
+            pitch_angle = math.atan2(state.accel_y - ref_y, g_ref)
             tilt_range_rad = math.radians(self._tilt_range)
             # Rescale from [-tilt_range_rad, +tilt_range_rad] → [0.0, 1.0].
-            roll_val = max(0.0, min(1.0, (roll_angle / tilt_range_rad + 1.0) / 2.0))
-            pitch_val = max(0.0, min(1.0, (pitch_angle / tilt_range_rad + 1.0) / 2.0))
-            actions.append(DJAction("effect_wet_dry", "master", roll_val))
-            actions.append(DJAction("effect_parameter", "master", pitch_val))
+            raw_roll = max(0.0, min(1.0, (roll_angle / tilt_range_rad + 1.0) / 2.0))
+            raw_pitch = max(0.0, min(1.0, (pitch_angle / tilt_range_rad + 1.0) / 2.0))
+            # EMA smoothing to remove accelerometer noise.
+            f = self._gyro_smoothing
+            self._gyro_smooth_roll = apply_smoothing(raw_roll, self._gyro_smooth_roll, f)
+            self._gyro_smooth_pitch = apply_smoothing(raw_pitch, self._gyro_smooth_pitch, f)
+            actions.append(DJAction("effect_wet_dry", "master", self._gyro_smooth_roll))
+            actions.append(DJAction("effect_parameter", "master", self._gyro_smooth_pitch))
 
         # ------------------------------------------------------------------
         # l) Update previous state for next call

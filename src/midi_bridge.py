@@ -81,6 +81,7 @@ class MIDIBridge:
             port_name: Human-readable name for the virtual port as it will
                 appear in Mixxx's MIDI controller list.
         """
+        self._port_name = port_name
         self._out = None
         self._out = rtmidi.MidiOut()
         self._out.open_virtual_port(port_name)
@@ -94,6 +95,18 @@ class MIDIBridge:
             return
         self._out.close_port()
         self._out = None
+
+    def reopen(self):
+        """Close and immediately reopen the virtual MIDI port.
+
+        Called after a DualSense USB reconnect so that Mixxx re-subscribes to
+        the port.  Mixxx drops its MIDI connection when the bridge pauses
+        during controller reconnection; reopening the port causes it to
+        reappear in the OS MIDI device list and Mixxx picks it back up.
+        """
+        self.close()
+        self._out = rtmidi.MidiOut()
+        self._out.open_virtual_port(self._port_name)
 
     # ------------------------------------------------------------------
     # Low-level send helpers
