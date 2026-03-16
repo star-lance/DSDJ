@@ -284,7 +284,7 @@ def test_left_stick_y_accumulates_deck_a_volume():
     mapper = InputMapper(_config())
     mapper.process(_blank_state())
     vol_before = mapper._deck_a_volume
-    mapper.process(_blank_state(left_stick_y=1.0))
+    mapper.process(_blank_state(left_stick_y=-1.0))
     assert mapper._deck_a_volume > vol_before
 
 
